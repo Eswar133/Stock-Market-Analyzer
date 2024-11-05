@@ -3,7 +3,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+import os
+from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from textblob import TextBlob
+import requests
 import logging
 
 # Configure logging
@@ -67,10 +71,35 @@ def create_rsi_chart(data: pd.DataFrame) -> go.Figure:
     )
     return fig
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Get the API key 
+api_key = os.environ.get("API_KEY")
+
+def fetch_news(api_key, ticker):
+    """Fetch news articles for a specific stock ticker."""
+    url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey={api_key}&language=en&sortBy=publishedAt&pageSize=5"
+    response = requests.get(url)
+    if response.status_code != 200:
+        logging.error("Failed to fetch the news")
+        return []
+    news_data = response.json()
+    articles = news_data.get("articles", [])
+    
+    # Perform sentiment analysis on each article's title
+    news_sentiment = []
+    for article in articles:
+        title = article["title"]
+        description = article.get("description", "No description available")
+        sentiment = TextBlob(title).sentiment.polarity
+        news_sentiment.append({"title": title, "description": description, "sentiment": sentiment})
+    return news_sentiment
+
 def main():
     st.set_page_config(page_title="Advanced Stock Market Analyzer", layout="wide")
     st.title("Advanced Stock Market Analyzer")
-
+    
     # Sidebar for user input
     st.sidebar.header("Input Parameters")
     ticker = st.sidebar.text_input("Enter stock ticker:", value="AAPL").upper()
@@ -85,45 +114,60 @@ def main():
         if not data.empty:
             data = calculate_moving_averages(data)
             data = calculate_rsi(data)
-
+            
             # Display stock information
             st.header(f"{ticker} Stock Analysis")
             col1, col2, col3 = st.columns(3)
             col1.metric("Current Price", f"${data['Close'].iloc[-1]:.2f}")
             col2.metric("50-day SMA", f"${data['SMA_50'].iloc[-1]:.2f}")
             col3.metric("RSI", f"{data['RSI'].iloc[-1]:.2f}")
-
+            
             # Create and display charts
             price_chart = create_chart(data)
             st.plotly_chart(price_chart, use_container_width=True)
-
+            
             rsi_chart = create_rsi_chart(data)
             st.plotly_chart(rsi_chart, use_container_width=True)
-
-            # Display recent data
-            st.subheader("Recent Data")
-            st.dataframe(data.tail().style.format({'Close': '${:.2f}', 'SMA_20': '${:.2f}', 'SMA_50': '${:.2f}', 'RSI': '{:.2f}'}))
-
-            # Technical Analysis
+            
+            # Technical analysis
             st.subheader("Technical Analysis")
             last_close = data['Close'].iloc[-1]
             sma_20 = data['SMA_20'].iloc[-1]
             sma_50 = data['SMA_50'].iloc[-1]
             rsi = data['RSI'].iloc[-1]
-
+            
             if last_close > sma_20 > sma_50:
                 st.write("The stock is in an uptrend. The current price is above both the 20-day and 50-day SMAs.")
             elif last_close < sma_20 < sma_50:
                 st.write("The stock is in a downtrend. The current price is below both the 20-day and 50-day SMAs.")
             else:
                 st.write("The stock is showing mixed signals. Consider additional indicators for a clearer picture.")
-
+            
             if rsi > 70:
                 st.write("The RSI indicates that the stock may be overbought.")
             elif rsi < 30:
                 st.write("The RSI indicates that the stock may be oversold.")
             else:
                 st.write("The RSI is neutral, indicating neither overbought nor oversold conditions.")
+                
+            # Fetch and display news with sentiment analysis
+            st.subheader(f"Recent News for {ticker}")
+            news_data = fetch_news(api_key, ticker)
+            
+            if news_data:
+                for news_item in news_data:
+                    title = news_item["title"]
+                    description = news_item["description"]
+                    sentiment = news_item["sentiment"]
+                    sentiment_text = "Positive" if sentiment > 0 else "Negative" if sentiment < 0 else "Neutral"
+                    sentiment_color = "green" if sentiment > 0 else "red" if sentiment < 0 else "gray"
+                    
+                    st.markdown(f"**{title}**")
+                    st.write(description)
+                    st.markdown(f"<span style='color:{sentiment_color}'>Sentiment: {sentiment_text} ({sentiment:.2f})</span>", unsafe_allow_html=True)
+                    st.write("---")
+            else:
+                st.write("No recent news found.")
 
 if __name__ == "__main__":
     main()
